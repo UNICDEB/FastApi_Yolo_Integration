@@ -841,3 +841,4 @@ async def detect_uploaded_image(request: Request, file: UploadFile = None, thres
         "image_url": "/" + save_path,
         "real_points": real_points
     })
+
