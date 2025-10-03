@@ -1,0 +1,60 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>YOLO Image Detection</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>YOLO Image Detection</h1>
+        <form action="/detect/" enctype="multipart/form-data" method="post">
+            <label for="file">Choose Image:</label>
+            <input name="file" type="file" accept="image/*" required>
+            <label for="threshold">Confidence Threshold (0.1 - 1.0):</label>
+            <input name="threshold" type="number" step="0.1" value="0.5" min="0.1" max="1.0" required>
+            <button type="submit">Detect</button>
+        </form>
+        <p>After submission, results will appear in JSON and the annotated image will be at <code>/static/detected.jpg</code>.</p>
+        <img src="/static/detected.jpg">
+    </div>
+</body>
+</html> -->
+
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>YOLO Image Detection</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<div class="container">
+    <h1>YOLO Image Detection</h1>
+    <form action="/detect/" enctype="multipart/form-data" method="post">
+        <label for="file">Choose Image:</label>
+        <input name="file" type="file" accept="image/*" required>
+        <label for="threshold">Confidence Threshold (0.1 - 1.0):</label>
+        <input name="threshold" type="number" step="0.1" value="0.5" min="0.1" max="1.0" required>
+        <button type="submit">Detect</button>
+    </form>
+
+    {% if message %}
+        <hr>
+        <h2>Result</h2>
+        <p><strong>Message:</strong> {{ message }}</p>
+        <p><strong>Number of Detections:</strong> {{ num_detections }}</p>
+        <p><strong>Processing Time:</strong> {{ processing_time_sec }} seconds</p>
+        <img src="{{ image_url }}" alt="Detected Image" style="max-width:100%; margin-top: 20px;">
+        {% if num_detections > 0 %}
+            <h3>Bounding Boxes:</h3>
+            <pre>{{ bounding_boxes }}</pre>
+            <h3>Centers:</h3>
+            <pre>{{ centers }}</pre>
+            <h3>Confidences:</h3>
+            <pre>{{ confidences }}</pre>
+        {% endif %}
+    {% endif %}
+</div>
+</body>
+</html> -->

@@ -1,0 +1,65 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Saffron Flower Detection</title>
+  <link rel="stylesheet" href="/static/styles1.css">
+  <script src="/static/main.js"></script>
+</head>
+<body>
+<div class="container">
+  <h1>Saffron Flower Detection</h1>
+
+  <!-- File Upload Form -->
+  <form action="/detect/" method="post" enctype="multipart/form-data" onsubmit="showSpinner()">
+    <h2>Upload Image & Detect</h2>
+    <label>Choose Image:</label>
+    <input type="file" name="file" accept="image/*" required>
+    <label>Confidence Threshold (0.1-1.0):</label>
+    <input type="number" name="threshold" step="0.1" min="0.1" max="1.0" value="0.5">
+    <button type="submit">Detect Uploaded Image</button>
+  </form>
+
+  <hr><br>
+
+  <!-- Camera Control Buttons -->
+  <h2>RealSense Live Camera</h2>
+  <button onclick="startCamera()">Open Camera (Live Preview)</button>
+
+  <form action="/capture-detect/" method="post" onsubmit="showSpinner()">
+    <label>Confidence Threshold (0.1-1.0):</label>
+    <input type="number" name="threshold" step="0.1" min="0.1" max="1.0" value="0.5">
+    <button type="submit">Capture & Detect</button>
+  </form>
+
+  <button onclick="clearResults()" style="margin-top:10px;">Clear Results</button>
+
+  <!-- Spinner -->
+  <div id="spinner" style="display:none; margin-top:20px;">
+    <p><strong>Processing... Please wait.</strong></p>
+    <div class="loader"></div>
+  </div>
+
+  <!-- Results -->
+  <div id="results">
+    {% if message %}
+      <hr>
+      <h2>Result</h2>
+      <p><strong>{{ message }}</strong></p>
+      <p>Detections: {{ num_detections }}</p>
+      <p>Processing Time: {{ processing_time_sec }}s</p>
+      <img src="{{ image_url }}" style="max-width:100%; margin-top:20px;">
+      {% if num_detections > 0 %}
+        <h3>Bounding Boxes:</h3>
+        <pre>{{ bounding_boxes }}</pre>
+        <h3>Centers:</h3>
+        <pre>{{ centers }}</pre>
+        <h3>Confidences:</h3>
+        <pre>{{ confidences }}</pre>
+      {% endif %}
+    {% endif %}
+  </div>
+</div>
+</body>
+</html>
