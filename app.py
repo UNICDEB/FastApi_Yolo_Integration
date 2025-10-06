@@ -766,7 +766,9 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
                 distance_m = depth_frame.get_distance(int(cx), int(cy))
                 # Deproject pixel to 3D point (meters)
                 point_3d = rs.rs2_deproject_pixel_to_point(depth_intrinsics, [int(cx), int(cy)], distance_m)
-                real_points.append([round(float(p), 4) for p in point_3d])  # round for neatness
+                # real_points.append([round(float(p), 4) for p in point_3d])  # round for neatness
+                real_points.append([int(p * 1000) for p in point_3d]) # Convert meters -> millimeters and cast to int
+
             except Exception as e:
                 # If depth missing at pixel (common for reflective or distant surfaces), append None
                 real_points.append([None, None, None])
