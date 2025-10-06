@@ -26,8 +26,8 @@
 // }
 
 ////////////
-#include <httplib.h>
-#include <nlohmann/json.hpp>
+#include <include/httplib.h>
+#include <include/json.hpp>
 #include <iostream>
 #include <thread>
 #include <chrono>

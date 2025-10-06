@@ -748,6 +748,7 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
     output_path = "static/detected_image/detected.jpg"
     cv2.imwrite(output_path, annotated if boxes else color_snapshot)
 
+
     # Convert center pixels -> 3D coordinates (meters) using intrinsics & depth
     real_points = []
     try:
