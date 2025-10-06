@@ -473,6 +473,7 @@ from fastapi.templating import Jinja2Templates
 from ultralytics import YOLO
 import pyrealsense2 as rs
 import requests
+import httpx
 
 # ------------- Configuration / Setup -------------
 app = FastAPI()
@@ -787,6 +788,41 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
     # }
     # send_results_to_other_server(payload)
 
+    ####################
+    #####################
+    # After detection:
+    if len(centers) > 0:
+        payload = {
+            "message": "Objects detected",
+            "centers": centers,
+            "real_points": real_points
+        }
+    else:
+        payload = {
+            "message": "No Object Detected, Try Again"
+        }
+
+    # Send to receiver
+    print("Sending to receiver:", payload)
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.post("http://10.240.13.57:5000", json=payload)
+            print("✅ Sent (httpx):", payload)
+            print("📩 Receiver response:", r.text)
+    except Exception as e:
+        print("❌ Send error (httpx):", e)
+        # Try synchronous fallback
+        try:
+            import requests
+            r = requests.post("http://10.240.13.57:5000", json=payload, timeout=5)
+            print("✅ Sent (requests):", payload)
+            print("📩 Receiver response:", r.text)
+        except Exception as e2:
+            print("❌ Send error (requests):", e2)
+    #################
+
+    ############
+
     return templates.TemplateResponse("index.html", {
         "request": request,
         "message": "✅ Objects detected" if boxes else "⚠️ No object detected",
@@ -832,6 +868,10 @@ async def detect_uploaded_image(request: Request, file: UploadFile = None, thres
     # No depth available -> placeholders
     real_points = [[None, None, None] for _ in centers]
 
+    ############
+    
+    #########
+
     return templates.TemplateResponse("index.html", {
         "request": request,
         "message": "✅ Objects detected" if boxes else "⚠️ No object detected",
@@ -844,3 +884,4 @@ async def detect_uploaded_image(request: Request, file: UploadFile = None, thres
         "real_points": real_points
     })
 
+    
