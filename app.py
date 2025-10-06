@@ -1023,15 +1023,16 @@ def detect_objects(image: np.ndarray, threshold: float):
 
 
 def compute_real_points(centers, depth_frame, intrinsics):
-    real_points = []
+    flat_points = []
     for (cx, cy) in centers:
         try:
             dist_m = depth_frame.get_distance(int(cx), int(cy))
             point_3d = rs.rs2_deproject_pixel_to_point(intrinsics, [int(cx), int(cy)], dist_m)
-            real_points.append([int(p * 1000) for p in point_3d])  # mm integers
+            flat_points.extend([int(p * 1000) for p in point_3d])  # mm integers
         except Exception:
-            real_points.append([None, None, None])
-    return real_points
+            flat_points.extend([None, None, None])
+    return [len(centers)] + flat_points if centers else []
+
 
 
 async def send_to_receiver(payload: dict):
