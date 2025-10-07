@@ -23,11 +23,7 @@ function startCamera() {
   fetch("/start-camera/", { method: "POST" })
     .then(response => response.json())
     .then(data => {
-      alert(data.status);
-      if (data.status === "Camera started") {
-        const v = document.getElementById('video_stream');
-        if (v) v.style.display = 'block';
-      }
+      alert(data.status); // OpenCV window opens on server side
     })
     .catch(err => alert("Error starting camera"));
 }
@@ -36,9 +32,7 @@ function stopCamera() {
   fetch("/stop-camera/", { method: "POST" })
     .then(response => response.json())
     .then(data => {
-      alert(data.status);
-      const v = document.getElementById('video_stream');
-      if (v) v.style.display = 'none';
+      alert(data.status); // OpenCV window will close
     })
     .catch(err => alert("Error stopping camera"));
 }
@@ -58,3 +52,4 @@ function clearResults() {
     resultDiv.innerHTML = "";
   }
 }
+

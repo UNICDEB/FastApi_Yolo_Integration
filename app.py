@@ -887,17 +887,6 @@
 
 #############################
 # Date: 06_10_2025
-"""
-app.py - FastAPI + Intel RealSense integration with depth capture and pixel->3D conversion
-
-Features:
-- RealSense live streaming via MJPEG (/video_feed).
-- Start/stop RealSense background thread with /start-camera/ and /stop-camera/.
-- Capture frames with /capture-detect/ -> saves RGB/depth, detects objects with YOLO,
-  computes (x, y, z) real-world coords, sends results to another device.
-- /detect/ works for uploaded images (no depth).
-"""
-
 import threading
 import time
 import os
@@ -907,14 +896,14 @@ import requests
 import httpx
 import pyrealsense2 as rs
 from fastapi import FastAPI, UploadFile, Form, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ultralytics import YOLO
 
 # -------------------- Global Config --------------------
 MODEL_PATH = "weights/custom_loss_py_yolov8_best_100.pt"
-RECEIVER_URL = "http://10.240.13.57:5000"
+RECEIVER_URL = "http://10.240.9.18:5000"
 
 app = FastAPI()
 model = YOLO(MODEL_PATH)
@@ -930,7 +919,6 @@ reader_thread = None
 stop_event = threading.Event()
 frame_lock = threading.Lock()
 
-latest_frame_bytes = None
 latest_color_frame = None
 latest_depth_frame = None
 
@@ -955,8 +943,9 @@ def stop_realsense_pipeline():
     pipeline = None
 
 
-def realsense_reader():
-    global latest_frame_bytes, latest_color_frame, latest_depth_frame
+def realsense_opencv_view():
+    """OpenCV live preview loop that runs in a background thread."""
+    global latest_color_frame, latest_depth_frame
 
     try:
         start_realsense_pipeline()
@@ -973,31 +962,19 @@ def realsense_reader():
                 continue
 
             color_image = np.asanyarray(color_frame.get_data())
-            success, jpeg = cv2.imencode(".jpg", color_image)
-            if not success:
-                continue
 
             with frame_lock:
-                latest_frame_bytes = jpeg.tobytes()
                 latest_color_frame = color_image.copy()
                 latest_depth_frame = depth_frame
 
-            time.sleep(0.01)
+            # Show in OpenCV window
+            cv2.imshow("Live Camera Feed", color_image)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+        cv2.destroyAllWindows()
     finally:
         stop_realsense_pipeline()
-
-
-def mjpeg_generator():
-    global latest_frame_bytes
-    boundary = b"--frame"
-    while not stop_event.is_set():
-        with frame_lock:
-            frame = latest_frame_bytes
-        if frame is None:
-            time.sleep(0.05)
-            continue
-        yield boundary + b"\r\nContent-Type: image/jpeg\r\n\r\n" + frame + b"\r\n"
-        time.sleep(0.03)
 
 
 # -------------------- Detection Helpers --------------------
@@ -1032,7 +1009,6 @@ def compute_real_points(centers, depth_frame, intrinsics):
         except Exception:
             flat_points.extend([None, None, None])
     return [len(centers)] + flat_points if centers else []
-
 
 
 async def send_to_receiver(payload: dict):
@@ -1072,9 +1048,9 @@ async def start_camera():
     global reader_thread, stop_event
     if reader_thread is None or not reader_thread.is_alive():
         stop_event.clear()
-        reader_thread = threading.Thread(target=realsense_reader, daemon=True)
+        reader_thread = threading.Thread(target=realsense_opencv_view, daemon=True)
         reader_thread.start()
-        return JSONResponse({"status": "Camera started"})
+        return JSONResponse({"status": "Camera started (OpenCV window opened)"})
     return JSONResponse({"status": "Camera already running"})
 
 
@@ -1083,12 +1059,8 @@ async def stop_camera():
     global stop_event
     stop_event.set()
     time.sleep(0.1)
+    cv2.destroyAllWindows()
     return JSONResponse({"status": "Camera stopped"})
-
-
-@app.get("/video_feed")
-async def video_feed():
-    return StreamingResponse(mjpeg_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 
 @app.post("/capture-detect/")
@@ -1195,5 +1167,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-    

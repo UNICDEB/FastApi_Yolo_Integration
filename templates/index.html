@@ -35,13 +35,6 @@
 
   <button onclick="clearResults()" style="margin-top:10px;">Clear Results</button>
 
-  <!-- Video Stream -->
-  <div style="text-align:center; margin-top:20px;">
-    <!-- The browser will request /video_feed and render MJPEG stream -->
-    <img id="video_stream" src="/video_feed" alt="Live stream"
-         style="max-width:100%; display:none; border:1px solid #ddd;" />
-  </div>
-
   <!-- Spinner -->
   <div id="spinner" style="display:none; margin-top:20px;">
     <p><strong>Processing... Please wait.</strong></p>
@@ -64,7 +57,7 @@
         <pre>{{ centers }}</pre>
         <h3>Confidences:</h3>
         <pre>{{ confidences }}</pre>
-        <h3>3D Points (meters):</h3>
+        <h3>3D Points (mm):</h3>
         <pre>{{ real_points }}</pre>
       {% endif %}
     {% endif %}
