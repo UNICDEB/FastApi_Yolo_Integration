@@ -1006,7 +1006,7 @@ def compute_real_points(centers, depth_frame, intrinsics):
     for (cx, cy) in centers:
         try:
             dist_m = depth_frame.get_distance(int(cx), int(cy))
-            if np.isnan(dist_m) or dist_m <= 0:   # Skip NaN or invalid distance
+            if np.isnan(dist_m) or dist_m <= 0 or dist_m==0:   # Skip NaN ,invalid & zero distance
                 continue
 
             point_3d = rs.rs2_deproject_pixel_to_point(intrinsics, [int(cx), int(cy)], dist_m)
