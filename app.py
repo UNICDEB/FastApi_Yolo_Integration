@@ -1001,14 +1001,27 @@ def detect_objects(image: np.ndarray, threshold: float):
 
 def compute_real_points(centers, depth_frame, intrinsics):
     flat_points = []
+    valid_count = 0
+
     for (cx, cy) in centers:
         try:
             dist_m = depth_frame.get_distance(int(cx), int(cy))
+            if np.isnan(dist_m) or dist_m <= 0:   # Skip NaN or invalid distance
+                continue
+
             point_3d = rs.rs2_deproject_pixel_to_point(intrinsics, [int(cx), int(cy)], dist_m)
-            flat_points.extend([int(p * 1000) for p in point_3d])  # mm integers
+
+            # Convert to millimeters (int)
+            px, py, pz = [int(p * 1000) for p in point_3d]
+            flat_points.extend([px, py, pz])
+            valid_count += 1
+
         except Exception:
-            flat_points.extend([None, None, None])
-    return [len(centers)] + flat_points if centers else []
+            continue  # skip errors silently
+
+    # First element = number of valid detections
+    return [valid_count] + flat_points if valid_count > 0 else []
+
 
 
 async def send_to_receiver(payload: dict):
