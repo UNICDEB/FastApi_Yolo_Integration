@@ -1,4 +1,4 @@
-
+/* 
 body {
     font-family: Arial, sans-serif;
     background: #f0f2f5;
@@ -61,4 +61,68 @@ pre {
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+} */
+
+
+body {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  background: #eef2f7;
+  color: #333;
+  margin: 0;
+  padding: 0;
+}
+
+.container {
+  max-width: 800px;
+  margin: 30px auto;
+  padding: 30px;
+  background: #fff;
+  border-radius: 12px;
+}
+
+h1, h2, h3, h4 {
+  text-align: center;
+  font-weight: 600;
+}
+
+.logo {
+  height: 50px;
+  width: auto;
+}
+
+.btn-gradient {
+  background: linear-gradient(45deg, #6a11cb, #2575fc);
+  color: #fff !important;
+  border: none;
+  transition: all 0.3s ease-in-out;
+}
+.btn-gradient:hover {
+  background: linear-gradient(45deg, #2575fc, #6a11cb);
+  transform: scale(1.05);
+}
+
+pre {
+  background: #f4f4f4;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.loader {
+  border: 8px solid #f3f3f3;
+  border-top: 8px solid #2575fc;
+  border-radius: 50%;
+  width: 50px;
+  height: 50px;
+  animation: spin 1s linear infinite;
+  margin: auto;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+footer {
+  font-size: 14px;
 }
