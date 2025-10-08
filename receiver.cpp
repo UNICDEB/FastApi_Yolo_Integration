@@ -26,64 +26,56 @@
 // }
 
 ////////////
-#include <include/httplib.h>
-#include <include/json.hpp>
+// Modified_Version
+
+#define _WIN32_WINNT 0x0A00  // Windows 11
+
 #include <iostream>
-#include <thread>
-#include <chrono>
+#include "include/httplib.h"
+#include "include/json.hpp"
 
 using json = nlohmann::json;
 
-// Compact receiver function
-void startReceiver(int port = 5000) {
+int main() {
     httplib::Server svr;
 
     svr.Post("/", [](const httplib::Request& req, httplib::Response& res) {
+        std::cout << "📩 Raw body: " << req.body << std::endl; // Print raw request body
+
         try {
-            json data = json::parse(req.body);
+            json received = json::parse(req.body);
 
-            // 📩 Print received JSON
-            std::cout << "📩 Received JSON:\n" << data.dump(4) << std::endl;
+            std::cout << "📩 Received: " << received.dump() << std::endl;
 
-            // Example: Access specific fields
-            if (data.contains("centers")) {
-                auto centers = data["centers"];
-                std::cout << "✅ Centers detected: " << centers.size() << std::endl;
+            if (!received.contains("real_points")) {
+                std::cout << "⚠️ Key 'real_points' missing" << std::endl;
             }
-            if (data.contains("real_points")) {
-                auto points = data["real_points"];
-                std::cout << "✅ Real points detected: " << points.size() << std::endl;
+            if (!received.contains("centers")) {
+                std::cout << "⚠️ Key 'centers' missing" << std::endl;
             }
 
-            // Respond to sender
-            json response = { {"status", "Received"}, {"data", data} };
+            auto final_points = received.value("real_points", json::array());
+            auto centers = received.value("centers", json::array());
+
+            std::cout << "final_points: " << final_points.dump() << std::endl;
+            std::cout << "centers: " << centers.dump() << std::endl;
+
+            json response = {
+                {"status", "Received"},
+                {"final_points", final_points},
+                {"centers", centers}
+            };
+
             res.set_content(response.dump(), "application/json");
-
-            // ⚡ Here you can call your robot functions instead of just printing
-            // e.g. moveRobotArm(centers, points);
-
-        } catch (std::exception& e) {
-            json error = { {"status", "Error"}, {"error", e.what()} };
+        } catch (const std::exception& e) {
+            std::cerr << "❌ Error parsing JSON: " << e.what() << std::endl;
             res.status = 400;
-            res.set_content(error.dump(), "application/json");
+            res.set_content(R"({"status":"Error","error":"Invalid JSON"})", "application/json");
         }
     });
 
-    std::cout << "🚀 Receiver running on port " << port << "..." << std::endl;
-    svr.listen("0.0.0.0", port);
-}
+    std::cout << "🚀 C++ Receiver running on port 5000..." << std::endl;
+    svr.listen("0.0.0.0", 5000);
 
-// Example usage with robot main loop
-int main() {
-    std::thread receiverThread([]() {
-        startReceiver(5000); // run HTTP receiver
-    });
-    receiverThread.detach(); // keep server running in background
-
-    // Your robot's main logic
-    while (true) {
-        std::cout << "🤖 Robot main loop running..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::seconds(5));
-    }
     return 0;
 }
