@@ -64,6 +64,9 @@ pre {
 } */
 
 
+/* =======================
+   Global Styles
+   ======================= */
 body {
   font-family: 'Segoe UI', Arial, sans-serif;
   background: #eef2f7;
@@ -85,22 +88,78 @@ h1, h2, h3, h4 {
   font-weight: 600;
 }
 
+/* =======================
+   Logo Styles
+   ======================= */
 .logo {
-  height: 50px;
-  width: auto;
+  width: 40px !important;
+  height: 40px !important;
+  max-width: 40px !important;
+  max-height: 40px !important;
+  object-fit: contain !important;
+  border-radius: 6px;
+  margin-left: 8px;
+  background: #fff;
+  padding: 4px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
 }
 
+/* =======================
+   Gradient Action Buttons
+   ======================= */
 .btn-gradient {
   background: linear-gradient(45deg, #6a11cb, #2575fc);
   color: #fff !important;
   border: none;
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 10px 16px;
   transition: all 0.3s ease-in-out;
-}
-.btn-gradient:hover {
-  background: linear-gradient(45deg, #2575fc, #6a11cb);
-  transform: scale(1.05);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
 }
 
+.btn-gradient:hover {
+  background: linear-gradient(45deg, #2575fc, #6a11cb);
+  transform: translateY(-3px) scale(1.05);
+  box-shadow: 0 6px 15px rgba(0, 0, 0, 0.25),
+              0 0 12px rgba(106, 17, 203, 0.5);
+}
+
+/* =======================
+   Stop Camera Button
+   ======================= */
+.btn-outline-danger {
+  border: 2px solid #dc3545 !important;
+  font-weight: 600;
+  transition: all 0.3s ease-in-out;
+}
+
+.btn-outline-danger:hover {
+  background: #dc3545 !important;
+  color: #fff !important;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(220, 53, 69, 0.4);
+}
+
+/* =======================
+   Clear Results Button
+   ======================= */
+.btn-secondary {
+  font-weight: 600;
+  transition: all 0.3s ease-in-out;
+}
+
+.btn-secondary:hover {
+  background: #6c757d !important;
+  color: #fff !important;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(108, 117, 125, 0.4);
+}
+
+/* =======================
+   Results Box
+   ======================= */
 pre {
   background: #f4f4f4;
   padding: 12px;
@@ -108,6 +167,9 @@ pre {
   font-size: 14px;
 }
 
+/* =======================
+   Loader Spinner
+   ======================= */
 .loader {
   border: 8px solid #f3f3f3;
   border-top: 8px solid #2575fc;
@@ -123,6 +185,9 @@ pre {
   100% { transform: rotate(360deg); }
 }
 
+/* =======================
+   Footer
+   ======================= */
 footer {
   font-size: 14px;
 }

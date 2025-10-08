@@ -19,6 +19,9 @@
 //   }
 // }
 
+
+
+
 function startCamera() {
   fetch("/start-camera/", { method: "POST" })
     .then(response => response.json())
