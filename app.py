@@ -311,6 +311,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ultralytics import YOLO
 from filterpy.kalman import KalmanFilter
+from collections import deque
 
 # -------------------- Global Config --------------------
 MODEL_PATH = "weights/custom_loss_py_yolov8_best_100.pt"
@@ -405,9 +406,10 @@ def detect_objects(image: np.ndarray, threshold: float):
     return annotated, boxes, centers, confidences
 
 
+
 # -------------------- Filtering Helpers --------------------
 def init_kalman_filter():
-    """Initialize a simple 1D Kalman Filter for distance smoothing."""
+    """Initialize a simple 1D Kalman Filter for depth smoothing."""
     kf = KalmanFilter(dim_x=2, dim_z=1)
     kf.x = np.array([[0.], [0.]])  # initial state: pos, velocity
     kf.F = np.array([[1., 1.],
@@ -426,11 +428,20 @@ def filter_depth_kalman(depth_value, kf: KalmanFilter):
     return kf.x[0, 0]
 
 
+# Maintain last N depth values for median filtering
+depth_history = {}  # key = point index, value = deque of last N depth readings
+MEDIAN_HISTORY = 5  # number of frames for median
+
 def compute_real_points_filtered(centers, depth_frame, intrinsics):
-    """Compute 3D points using filtered depth (Kalman + median)."""
+    """
+    Compute 3D coordinates using both Kalman + Median filters.
+    Returns list: [valid_count, x1, y1, z1, x2, y2, z2, ...]
+    """
     flat_points = []
     valid_count = 0
-    kfs = [init_kalman_filter() for _ in centers]  # one Kalman per detected point
+
+    # Initialize Kalman filter per detected point
+    kfs = [init_kalman_filter() for _ in centers]
 
     for i, (cx, cy) in enumerate(centers):
         try:
@@ -438,19 +449,28 @@ def compute_real_points_filtered(centers, depth_frame, intrinsics):
             if np.isnan(dist_m) or dist_m <= 0:
                 continue
 
-            # Apply Kalman filter
-            dist_m_filtered = filter_depth_kalman(dist_m, kfs[i])
+            # --- Median Filtering ---
+            if i not in depth_history:
+                depth_history[i] = deque(maxlen=MEDIAN_HISTORY)
+            depth_history[i].append(dist_m)
+            dist_m_median = np.median(depth_history[i])
 
+            # --- Kalman Filtering ---
+            dist_m_filtered = filter_depth_kalman(dist_m_median, kfs[i])
+
+            # Compute 3D point in meters
             point_3d = rs.rs2_deproject_pixel_to_point(intrinsics, [int(cx), int(cy)], dist_m_filtered)
 
-            # Convert to mm
+            # Convert to millimeters (int)
             px, py, pz = [int(p * 1000) for p in point_3d]
             flat_points.extend([px, py, pz])
             valid_count += 1
+
         except Exception:
             continue
 
     return [valid_count] + flat_points if valid_count > 0 else []
+
 
 
 # -------------------- Sending Helpers --------------------
