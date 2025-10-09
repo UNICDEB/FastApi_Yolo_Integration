@@ -664,7 +664,8 @@ KALMAN_R = 0.05          # measurement noise for Kalman
 KALMAN_Q = 1e-5          # process noise scale
 CENTER_QUANT = 4         # pixels: quantize center to this grid to maintain kf/history across frames
 
-# Camera tilt angle (degrees). Change to 45, 67, 90 etc. to match your camera.
+# Camera tilt angle (degrees). Set to actual mount: e.g. 90.0 for straight-down,
+# 45.0 for 45° from horizontal, 110.0 for backward tilt etc.
 CAMERA_TILT_ANGLE = 110.0
 
 app = FastAPI()
@@ -688,10 +689,8 @@ latest_depth_frame = None  # will store filtered depth frame
 kf_dict = {}         # key -> KalmanFilter instance
 depth_history = {}   # key -> deque of recent raw depth medians
 
-# Precompute rotation values
-theta_rad = math.radians(CAMERA_TILT_ANGLE)
-cos_theta = math.cos(theta_rad)
-sin_theta = math.sin(theta_rad)
+# Precompute rotation convenience (not used directly here; rotation computed on demand)
+# We treat 90° as the "no rotation" reference: rotation angle = (tilt - 90) degrees.
 
 
 # -------------------- RealSense Helpers --------------------
@@ -700,7 +699,6 @@ def start_realsense_pipeline():
     global pipeline
     pipeline = rs.pipeline()
     config = rs.config()
-    # Use same resolution as your original code
     config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
     config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
     return pipeline.start(config)
@@ -729,14 +727,12 @@ def apply_realsense_filters(depth_frame):
     Returns a filtered depth frame object.
     """
     try:
-        # Apply decimation (optional) -> spatial -> temporal -> hole filling
         f = decimation.process(depth_frame)
         f = spatial.process(f)
         f = temporal.process(f)
         f = hole_filling.process(f)
         return f
     except Exception:
-        # If filters fail for some reason, return original
         return depth_frame
 
 
@@ -834,8 +830,6 @@ def sample_region_median(depth_frame, cx, cy, intrinsics, region_size=REGION_SIZ
     Returns median distance in meters of valid pixels, or None if none valid.
     """
     half = region_size // 2
-    widths = (intrinsics.width, intrinsics.height)
-
     vals = []
     for dx in range(-half, half + 1):
         for dy in range(-half, half + 1):
@@ -860,14 +854,30 @@ def sample_region_median(depth_frame, cx, cy, intrinsics, region_size=REGION_SIZ
 
 
 def rotate_point_camera_to_world(px_mm, py_mm, pz_mm, tilt_deg=CAMERA_TILT_ANGLE):
-    """Rotate point from camera coordinates to world coordinates (tilt about X-axis)."""
-    # input in millimeters (float or int)
-    theta = math.radians(tilt_deg)
+    """
+    Rotate point from camera coordinates to world coordinates.
+    We treat CAMERA_TILT_ANGLE == 90.0 as the 'no rotation' reference.
+    Rotation axis: X-axis (pitch). Rotation angle = (tilt_deg - 90) degrees.
+
+    px_mm: camera X (left/right) in mm
+    py_mm: camera Y (up/down) in mm
+    pz_mm: camera Z (forward along optical axis) in mm
+
+    Returns world (x, y, z) in mm (floats).
+    """
+    # If tilt is exactly 90 (or very close), do not rotate.
+    angle_deg = tilt_deg - 90.0
+    if abs(angle_deg) < 1e-3:
+        return px_mm, py_mm, pz_mm
+
+    theta = math.radians(angle_deg)
     c = math.cos(theta)
     s = math.sin(theta)
-    # px_mm is lateral (camera X)
-    # py_mm is vertical in camera frame (camera Y)
-    # pz_mm is forward along camera optical axis (camera Z)
+
+    # Rotation matrix Rx(theta) applied to (x_cam, y_cam, z_cam)
+    # [1  0   0]   [x]
+    # [0  c  -s] * [y]
+    # [0  s   c]   [z]
     x_w = px_mm
     y_w = c * py_mm - s * pz_mm
     z_w = s * py_mm + c * pz_mm
@@ -876,28 +886,26 @@ def rotate_point_camera_to_world(px_mm, py_mm, pz_mm, tilt_deg=CAMERA_TILT_ANGLE
 
 def compute_real_points_filtered(centers, depth_frame, intrinsics):
     """
-    Compute 3D coordinates using region sampling + Median history + Kalman filtering + (optional) rotation correction.
+    Compute 3D coordinates using region sampling + Median history + Kalman filtering + conditional rotation correction.
     Returns list: [valid_count, x1, y1, z1, x2, y2, z2, ...] where coords are integers in millimeters.
     """
     flat_points = []
     valid_count = 0
 
-    # Ensure depth_frame is not None
     if depth_frame is None:
         return []
 
     for (cx, cy) in centers:
         try:
-            # Quantized key for this approximate location (to maintain per-object state)
             key = quantize_center(cx, cy)
 
-            # 1) Sample a small region and take the median (reduces single-pixel outliers)
+            # 1) Region median sampling
             region_median = sample_region_median(depth_frame, cx, cy, intrinsics, region_size=REGION_SIZE)
             if region_median is None or math.isnan(region_median) or region_median <= 0:
-                # If region median not available, skip
+                # no valid depth in region
                 continue
 
-            # 2) Maintain temporal median history per key
+            # 2) temporal median history
             if key not in depth_history:
                 depth_history[key] = deque(maxlen=MEDIAN_HISTORY)
             depth_history[key].append(region_median)
@@ -908,9 +916,8 @@ def compute_real_points_filtered(centers, depth_frame, intrinsics):
                 kf_dict[key] = init_kalman_filter(initial_depth=temporal_median)
             depth_filtered_m = filter_depth_kalman(temporal_median, kf_dict[key])  # meters
 
-            # 4) Deproject using intrinsics to obtain camera-space (meters)
+            # 4) Deproject to camera-space (meters)
             point_3d_m = rs.rs2_deproject_pixel_to_point(intrinsics, [int(cx), int(cy)], depth_filtered_m)
-            # Keep floats in meters -> convert to mm at last step
             px_m, py_m, pz_m = float(point_3d_m[0]), float(point_3d_m[1]), float(point_3d_m[2])
 
             # 5) Convert to millimeters (float)
@@ -918,15 +925,17 @@ def compute_real_points_filtered(centers, depth_frame, intrinsics):
             py_mm = py_m * 1000.0
             pz_mm = pz_m * 1000.0
 
-            # 6) Apply rotation correction to world coordinates (tilt about X-axis)
+            # 6) Conditional rotation:
+            # - If CAMERA_TILT_ANGLE == 90: no rotation (camera downwards)
+            # - Else: rotate by (tilt - 90) about X axis (works for <90 and >90)
             x_w_mm, y_w_mm, z_w_mm = rotate_point_camera_to_world(px_mm, py_mm, pz_mm, tilt_deg=CAMERA_TILT_ANGLE)
 
-            # Convert to int mm when storing (but we kept computations in float until now)
+            # 7) Store integer mm values (rounded)
             flat_points.extend([int(round(x_w_mm)), int(round(y_w_mm)), int(round(z_w_mm))])
             valid_count += 1
 
         except Exception as e:
-            # don't let one bad point crash whole routine
+            # Log but continue
             print("⚠️ compute_real_points_filtered exception for center", (cx, cy), ":", e)
             continue
 
@@ -1018,9 +1027,7 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
     real_points = []
     try:
         intrinsics = depth_frame.get_profile().as_video_stream_profile().get_intrinsics()
-        # compute with smoothing + rotation correction
         real_points = compute_real_points_filtered(centers, depth_frame, intrinsics)
-
     except Exception as e:
         print("⚠️ Intrinsics error:", e)
 
