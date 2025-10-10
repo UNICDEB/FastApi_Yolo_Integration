@@ -1291,20 +1291,32 @@ latest_intrinsics = None
 
 # -------------------- DEPTH FILTERS --------------------
 def create_depth_filters():
-    filters = []
-    filters.append(rs.decimation_filter())
-    filters.append(rs.disparity_transform(True))
-    filters.append(rs.spatial_filter())
-    filters.append(rs.temporal_filter())
-    filters.append(rs.disparity_transform(False))
+    # 1. Decimation filter (reduce depth noise / resolution)
+    decimation = rs.decimation_filter()
+    decimation.set_option(rs.option.filter_magnitude, 2)  # Set magnitude (1=default, 2=half resolution)
+    
+    # 2. Depth to disparity
+    depth_to_disparity = rs.disparity_transform(True)
+    
+    # 3. Spatial filter
+    spatial = rs.spatial_filter()
+    
+    # 4. Temporal filter
+    temporal = rs.temporal_filter()
+    
+    # 5. Disparity to depth
+    disparity_to_depth = rs.disparity_transform(False)
+    
+    filters = [decimation, depth_to_disparity, spatial, temporal, disparity_to_depth]
     return filters
+
 
 depth_filters = create_depth_filters()
 
 def apply_depth_filters(depth_frame):
     for f in depth_filters:
         depth_frame = f.process(depth_frame)
-    return depth_frame.as_depth_frame()  # ✅ Convert back to depth frame
+    return depth_frame.as_depth_frame()  # ensure depth_frame type
 
 # -------------------- REALSENSE THREAD --------------------
 def start_realsense_pipeline():
@@ -1382,14 +1394,22 @@ def compute_real_points(centers, depth_frame, intrinsics):
     points = []
     for (cx, cy) in centers:
         try:
+            # Check bounds
+            if cx < 0 or cy < 0 or cx >= depth_frame.get_width() or cy >= depth_frame.get_height():
+                continue
+
             dist_m = depth_frame.get_distance(cx, cy)
             if np.isnan(dist_m) or dist_m <= 0:
                 continue
+
             X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
             Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
             Z = dist_m
             points.append((X, Y, Z))
-            print(f"3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")  # ✅ Print in terminal
+
+            # ✅ Print to terminal
+            print(f"3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
+
         except Exception as e:
             print(f"⚠️ Skipping point ({cx},{cy}) due to error:", e)
     return points
@@ -1467,15 +1487,17 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
     annotated, boxes, centers, confs = detect_objects(color_snapshot, threshold)
     t1 = time.time()
 
+    # Save color + annotated image
     cv2.imwrite("static/capture_image/frame.jpg", color_snapshot)
     cv2.imwrite("static/detected_image/detected.jpg", annotated if boxes else color_snapshot)
 
+    # Compute real 3D points immediately from live depth
     real_points = compute_real_points(centers, depth_frame, intrinsics) if centers else []
 
+    # Send payload
     payload = {"message": "Objects detected" if centers else "No Object Detected",
                "centers": centers,
                "real_points": real_points}
-
     await send_to_receiver(payload)
 
     return templates.TemplateResponse("index.html", {
