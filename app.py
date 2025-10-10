@@ -1016,37 +1016,34 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 pipeline = None
+align = None
 reader_thread = None
 stop_event = threading.Event()
 frame_lock = threading.Lock()
 
 latest_color_frame = None
 latest_depth_frame = None
-align = None
+latest_intrinsics = None
 
 # -------------------- RealSense Filters --------------------
 def create_depth_filters():
     filters = []
-    decimation = rs.decimation_filter()
-    decimation.set_option(rs.option.filter_magnitude, 1)
-    filters.append(decimation)
-
-    depth_to_disparity = rs.disparity_transform(True)
-    filters.append(depth_to_disparity)
-
-    spatial = rs.spatial_filter()
-    filters.append(spatial)
-
-    temporal = rs.temporal_filter()
-    filters.append(temporal)
-
-    disparity_to_depth = rs.disparity_transform(False)
-    filters.append(disparity_to_depth)
+    filters.append(rs.decimation_filter())
+    filters[-1].set_option(rs.option.filter_magnitude, 1)
+    filters.append(rs.disparity_transform(True))
+    filters.append(rs.spatial_filter())
+    filters.append(rs.temporal_filter())
+    filters.append(rs.disparity_transform(False))
     return filters
 
 depth_filters = create_depth_filters()
 
-# -------------------- RealSense Helpers --------------------
+def apply_depth_filters(depth_frame):
+    for f in depth_filters:
+        depth_frame = f.process(depth_frame)
+    return depth_frame
+
+# -------------------- RealSense Thread --------------------
 def start_realsense_pipeline():
     global pipeline, align
     pipeline = rs.pipeline()
@@ -1055,8 +1052,7 @@ def start_realsense_pipeline():
     config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
     profile = pipeline.start(config)
 
-    align_to = rs.stream.color
-    align = rs.align(align_to)
+    align = rs.align(rs.stream.color)
     return profile
 
 def stop_realsense_pipeline():
@@ -1068,10 +1064,40 @@ def stop_realsense_pipeline():
             pass
     pipeline = None
 
-def apply_depth_filters(depth_frame):
-    for f in depth_filters:
-        depth_frame = f.process(depth_frame)
-    return depth_frame
+def realsense_thread():
+    global latest_color_frame, latest_depth_frame, latest_intrinsics
+    try:
+        start_realsense_pipeline()
+    except Exception as e:
+        print("❌ Failed to start RealSense pipeline:", e)
+        return
+
+    try:
+        while not stop_event.is_set():
+            frames = pipeline.wait_for_frames()
+            aligned_frames = align.process(frames)
+
+            color_frame = aligned_frames.get_color_frame()
+            depth_frame = aligned_frames.get_depth_frame()
+            if not color_frame or not depth_frame:
+                continue
+
+            depth_frame = apply_depth_filters(depth_frame)
+            color_image = np.asanyarray(color_frame.get_data())
+
+            intrinsics = color_frame.profile.as_video_stream_profile().get_intrinsics()
+
+            with frame_lock:
+                latest_color_frame = color_image.copy()
+                latest_depth_frame = depth_frame
+                latest_intrinsics = intrinsics
+
+            cv2.imshow("Live Camera Feed", color_image)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+        cv2.destroyAllWindows()
+    finally:
+        stop_realsense_pipeline()
 
 # -------------------- YOLO Detection --------------------
 def detect_objects(image: np.ndarray, threshold: float):
@@ -1103,7 +1129,6 @@ def compute_real_points(centers, depth_frame, intrinsics):
             dist_m = depth_frame.get_distance(cx, cy)
             if np.isnan(dist_m) or dist_m <= 0:
                 continue
-            # Convert pixel to 3D coordinates
             X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
             Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
             Z = dist_m
@@ -1128,40 +1153,6 @@ async def send_to_receiver(payload: dict):
             print("📩 Receiver response:", r.text)
         except Exception as e2:
             print("❌ Fallback send error:", e2)
-
-# -------------------- RealSense Thread --------------------
-def realsense_thread():
-    global latest_color_frame, latest_depth_frame
-    try:
-        start_realsense_pipeline()
-    except Exception as e:
-        print("❌ Failed to start RealSense pipeline:", e)
-        return
-
-    try:
-        while not stop_event.is_set():
-            frames = pipeline.wait_for_frames()
-            aligned_frames = align.process(frames)
-
-            color_frame = aligned_frames.get_color_frame()
-            depth_frame = aligned_frames.get_depth_frame()
-            if not color_frame or not depth_frame:
-                continue
-
-            depth_frame = apply_depth_filters(depth_frame)
-            color_image = np.asanyarray(color_frame.get_data())
-
-            with frame_lock:
-                latest_color_frame = color_image.copy()
-                latest_depth_frame = depth_frame
-
-            cv2.imshow("Live Camera Feed", color_image)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-
-        cv2.destroyAllWindows()
-    finally:
-        stop_realsense_pipeline()
 
 # -------------------- FastAPI Routes --------------------
 @app.get("/")
@@ -1198,13 +1189,14 @@ async def stop_camera():
 
 @app.post("/capture-detect/")
 async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
-    global latest_color_frame, latest_depth_frame
+    global latest_color_frame, latest_depth_frame, latest_intrinsics
 
     with frame_lock:
         color_snapshot = latest_color_frame.copy() if latest_color_frame is not None else None
         depth_frame = latest_depth_frame
+        intrinsics = latest_intrinsics
 
-    if color_snapshot is None or depth_frame is None:
+    if color_snapshot is None or depth_frame is None or intrinsics is None:
         return templates.TemplateResponse("index.html", {
             "request": request,
             "message": "❌ Failed to capture image. Start camera first.",
@@ -1225,17 +1217,11 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
 
     cv2.imwrite("static/detected_image/detected.jpg", annotated if boxes else color_snapshot)
 
-    real_points = []
-    try:
-        intrinsics = color_frame.profile.as_video_stream_profile().intrinsics
-        real_points = compute_real_points(centers, depth_frame, intrinsics)
-    except Exception as e:
-        print("⚠️ Intrinsics error:", e)
+    real_points = compute_real_points(centers, depth_frame, intrinsics) if centers else []
 
-    if len(centers) > 0:
-        payload = {"message": "Objects detected", "centers": centers, "real_points": real_points}
-    else:
-        payload = {"message": "No Object Detected, Try Again"}
+    payload = {"message": "Objects detected" if centers else "No Object Detected",
+               "centers": centers,
+               "real_points": real_points}
 
     await send_to_receiver(payload)
 
