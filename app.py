@@ -1022,46 +1022,42 @@ frame_lock = threading.Lock()
 
 latest_color_frame = None
 latest_depth_frame = None
+align = None
 
 # -------------------- RealSense Filters --------------------
-def create_depth_filter_pipeline():
-    """Create Intel RealSense depth filter sequence."""
+def create_depth_filters():
+    filters = []
     decimation = rs.decimation_filter()
-    decimation.set_option(rs.option.filter_magnitude, 2)  # reduce resolution slightly
+    decimation.set_option(rs.option.filter_magnitude, 1)
+    filters.append(decimation)
 
     depth_to_disparity = rs.disparity_transform(True)
-    disparity_to_depth = rs.disparity_transform(False)
+    filters.append(depth_to_disparity)
 
     spatial = rs.spatial_filter()
-    spatial.set_option(rs.option.holes_fill, 3)  # fill missing pixels
+    filters.append(spatial)
 
     temporal = rs.temporal_filter()
+    filters.append(temporal)
 
+    disparity_to_depth = rs.disparity_transform(False)
+    filters.append(disparity_to_depth)
+    return filters
 
-    return decimation, depth_to_disparity, spatial, temporal, disparity_to_depth
-
-# Init filters once
-decimation, depth_to_disparity, spatial, temporal, disparity_to_depth = create_depth_filter_pipeline()
-
-def apply_depth_filters(depth_frame):
-    """Apply depth filters sequentially."""
-    if not depth_frame:
-        return None
-    depth_frame = decimation.process(depth_frame)
-    depth_frame = depth_to_disparity.process(depth_frame)
-    depth_frame = spatial.process(depth_frame)
-    depth_frame = temporal.process(depth_frame)
-    depth_frame = disparity_to_depth.process(depth_frame)
-    return depth_frame
+depth_filters = create_depth_filters()
 
 # -------------------- RealSense Helpers --------------------
 def start_realsense_pipeline():
-    global pipeline
+    global pipeline, align
     pipeline = rs.pipeline()
     config = rs.config()
     config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
     config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
-    return pipeline.start(config)
+    profile = pipeline.start(config)
+
+    align_to = rs.stream.color
+    align = rs.align(align_to)
+    return profile
 
 def stop_realsense_pipeline():
     global pipeline
@@ -1072,39 +1068,12 @@ def stop_realsense_pipeline():
             pass
     pipeline = None
 
-def realsense_opencv_view():
-    global latest_color_frame, latest_depth_frame
-    try:
-        start_realsense_pipeline()
-    except Exception as e:
-        print("❌ Failed to start RealSense pipeline:", e)
-        return
+def apply_depth_filters(depth_frame):
+    for f in depth_filters:
+        depth_frame = f.process(depth_frame)
+    return depth_frame
 
-    try:
-        while not stop_event.is_set():
-            frames = pipeline.wait_for_frames()
-            color_frame = frames.get_color_frame()
-            depth_frame = frames.get_depth_frame()
-
-            if not color_frame or not depth_frame:
-                continue
-
-            depth_frame = apply_depth_filters(depth_frame)  # ✅ apply filters
-
-            color_image = np.asanyarray(color_frame.get_data())
-
-            with frame_lock:
-                latest_color_frame = color_image.copy()
-                latest_depth_frame = depth_frame
-
-            cv2.imshow("Live Camera Feed", color_image)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-        cv2.destroyAllWindows()
-    finally:
-        stop_realsense_pipeline()
-
-# -------------------- Detection Helpers --------------------
+# -------------------- YOLO Detection --------------------
 def detect_objects(image: np.ndarray, threshold: float):
     results = model(image)
     boxes_raw = results[0].boxes.xyxy.tolist()
@@ -1127,24 +1096,22 @@ def detect_objects(image: np.ndarray, threshold: float):
 
 # -------------------- 3D Point Computation --------------------
 def compute_real_points(centers, depth_frame, intrinsics):
-    """Compute 3D coordinates directly with depth filters applied."""
-    flat_points = []
+    points = []
     valid_count = 0
-
     for (cx, cy) in centers:
         try:
-            dist_m = depth_frame.get_distance(int(cx), int(cy))
+            dist_m = depth_frame.get_distance(cx, cy)
             if np.isnan(dist_m) or dist_m <= 0:
                 continue
-
-            point_3d = rs.rs2_deproject_pixel_to_point(intrinsics, [int(cx), int(cy)], dist_m)
-            px, py, pz = [int(p * 1000) for p in point_3d]  # convert to mm
-            flat_points.extend([px, py, pz])
+            # Convert pixel to 3D coordinates
+            X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
+            Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
+            Z = dist_m
+            points.extend([int(X*1000), int(Y*1000), int(Z*1000)])
             valid_count += 1
-        except Exception:
+        except:
             continue
-
-    return [valid_count] + flat_points if valid_count > 0 else []
+    return [valid_count] + points if valid_count > 0 else []
 
 # -------------------- Sending Helpers --------------------
 async def send_to_receiver(payload: dict):
@@ -1162,7 +1129,41 @@ async def send_to_receiver(payload: dict):
         except Exception as e2:
             print("❌ Fallback send error:", e2)
 
-# -------------------- Routes --------------------
+# -------------------- RealSense Thread --------------------
+def realsense_thread():
+    global latest_color_frame, latest_depth_frame
+    try:
+        start_realsense_pipeline()
+    except Exception as e:
+        print("❌ Failed to start RealSense pipeline:", e)
+        return
+
+    try:
+        while not stop_event.is_set():
+            frames = pipeline.wait_for_frames()
+            aligned_frames = align.process(frames)
+
+            color_frame = aligned_frames.get_color_frame()
+            depth_frame = aligned_frames.get_depth_frame()
+            if not color_frame or not depth_frame:
+                continue
+
+            depth_frame = apply_depth_filters(depth_frame)
+            color_image = np.asanyarray(color_frame.get_data())
+
+            with frame_lock:
+                latest_color_frame = color_image.copy()
+                latest_depth_frame = depth_frame
+
+            cv2.imshow("Live Camera Feed", color_image)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+        cv2.destroyAllWindows()
+    finally:
+        stop_realsense_pipeline()
+
+# -------------------- FastAPI Routes --------------------
 @app.get("/")
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {
@@ -1182,7 +1183,7 @@ async def start_camera():
     global reader_thread, stop_event
     if reader_thread is None or not reader_thread.is_alive():
         stop_event.clear()
-        reader_thread = threading.Thread(target=realsense_opencv_view, daemon=True)
+        reader_thread = threading.Thread(target=realsense_thread, daemon=True)
         reader_thread.start()
         return JSONResponse({"status": "Camera started (OpenCV window opened)"})
     return JSONResponse({"status": "Camera already running"})
@@ -1197,7 +1198,7 @@ async def stop_camera():
 
 @app.post("/capture-detect/")
 async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
-    global latest_color_frame, latest_depth_frame, pipeline
+    global latest_color_frame, latest_depth_frame
 
     with frame_lock:
         color_snapshot = latest_color_frame.copy() if latest_color_frame is not None else None
@@ -1226,7 +1227,7 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
 
     real_points = []
     try:
-        intrinsics = depth_frame.get_profile().as_video_stream_profile().get_intrinsics()
+        intrinsics = color_frame.profile.as_video_stream_profile().intrinsics
         real_points = compute_real_points(centers, depth_frame, intrinsics)
     except Exception as e:
         print("⚠️ Intrinsics error:", e)
