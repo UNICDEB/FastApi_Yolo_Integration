@@ -988,6 +988,269 @@
 
 #########################
 
+# import threading
+# import time
+# import os
+# import cv2
+# import numpy as np
+# import requests
+# import httpx
+# import pyrealsense2 as rs
+# from fastapi import FastAPI, UploadFile, Form, Request
+# from fastapi.responses import JSONResponse
+# from fastapi.staticfiles import StaticFiles
+# from fastapi.templating import Jinja2Templates
+# from ultralytics import YOLO
+
+# # -------------------- CONFIG --------------------
+# MODEL_PATH = "weights/custom_loss_py_yolov8_best_100.pt"
+# RECEIVER_URL = "http://10.240.9.18:5000"
+
+# app = FastAPI()
+# model = YOLO(MODEL_PATH)
+
+# os.makedirs("static/capture_image", exist_ok=True)
+# os.makedirs("static/detected_image", exist_ok=True)
+
+# app.mount("/static", StaticFiles(directory="static"), name="static")
+# templates = Jinja2Templates(directory="templates")
+
+# # -------------------- GLOBALS --------------------
+# pipeline = None
+# align = None
+# reader_thread = None
+# stop_event = threading.Event()
+# frame_lock = threading.Lock()
+
+# latest_color_frame = None
+# latest_depth_frame = None
+# latest_intrinsics = None
+
+# # -------------------- DEPTH FILTERS --------------------
+# def create_depth_filters():
+#     filters = []
+#     decimation = rs.decimation_filter()
+#     decimation.set_option(rs.option.filter_magnitude, 1)
+#     filters.append(decimation)
+#     filters.append(rs.disparity_transform(True))
+#     filters.append(rs.spatial_filter())
+#     filters.append(rs.temporal_filter())
+#     filters.append(rs.disparity_transform(False))
+#     return filters
+
+# depth_filters = create_depth_filters()
+
+# def apply_depth_filters(depth_frame):
+#     for f in depth_filters:
+#         depth_frame = f.process(depth_frame)
+#     return depth_frame
+
+# # -------------------- REALSENSE THREAD --------------------
+# def start_realsense_pipeline():
+#     global pipeline, align
+#     pipeline = rs.pipeline()
+#     config = rs.config()
+#     config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
+#     config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
+#     profile = pipeline.start(config)
+#     align = rs.align(rs.stream.color)
+#     return profile
+
+# def stop_realsense_pipeline():
+#     global pipeline
+#     if pipeline is not None:
+#         try:
+#             pipeline.stop()
+#         except Exception:
+#             pass
+#     pipeline = None
+
+# def realsense_thread():
+#     global latest_color_frame, latest_depth_frame, latest_intrinsics
+#     try:
+#         start_realsense_pipeline()
+#     except Exception as e:
+#         print("❌ Failed to start RealSense pipeline:", e)
+#         return
+
+#     try:
+#         while not stop_event.is_set():
+#             frames = pipeline.wait_for_frames()
+#             aligned_frames = align.process(frames)
+
+#             color_frame = aligned_frames.get_color_frame()
+#             depth_frame = aligned_frames.get_depth_frame()
+#             if not color_frame or not depth_frame:
+#                 continue
+
+#             depth_frame = apply_depth_filters(depth_frame)
+#             color_image = np.asanyarray(color_frame.get_data())
+#             intrinsics = color_frame.profile.as_video_stream_profile().intrinsics
+
+#             with frame_lock:
+#                 latest_color_frame = color_image.copy()
+#                 latest_depth_frame = depth_frame
+#                 latest_intrinsics = intrinsics
+
+#             # ----------------- SHOW LIVE FEED -----------------
+#             cv2.imshow("Live RealSense Feed", color_image)
+#             if cv2.waitKey(1) & 0xFF == ord('q'):
+#                 stop_event.set()
+#                 break
+
+#         cv2.destroyAllWindows()
+#     finally:
+#         stop_realsense_pipeline()
+
+# # -------------------- YOLO DETECTION --------------------
+# def detect_objects(image: np.ndarray, threshold: float):
+#     results = model(image)
+#     boxes_raw = results[0].boxes.xyxy.tolist()
+#     confs_raw = results[0].boxes.conf.tolist()
+
+#     annotated = image.copy()
+#     boxes, centers, confidences = [], [], []
+
+#     for box, conf in zip(boxes_raw, confs_raw):
+#         if conf >= threshold:
+#             x1, y1, x2, y2 = map(int, box)
+#             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+#             cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
+#             cv2.circle(annotated, (cx, cy), 5, (0, 255, 0), -1)
+#             boxes.append([x1, y1, x2, y2])
+#             centers.append([cx, cy])
+#             confidences.append(round(float(conf), 3))
+
+#     return annotated, boxes, centers, confidences
+
+# # -------------------- 3D POINT CONVERSION --------------------
+# def compute_real_points(centers, depth_frame, intrinsics):
+#     points = []
+#     valid_count = 0
+#     for (cx, cy) in centers:
+#         try:
+#             dist_m = depth_frame.get_distance(cx, cy)
+#             if np.isnan(dist_m) or dist_m <= 0:
+#                 continue
+#             X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
+#             Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
+#             Z = dist_m
+#             points.extend([int(X*1000), int(Y*1000), int(Z*1000)])
+#             valid_count += 1
+#         except:
+#             continue
+#     return [valid_count] + points if valid_count > 0 else []
+
+# # -------------------- SEND TO RECEIVER --------------------
+# async def send_to_receiver(payload: dict):
+#     try:
+#         async with httpx.AsyncClient(timeout=5) as client:
+#             r = await client.post(RECEIVER_URL, json=payload)
+#             print("✅ Sent to receiver:", payload)
+#             print("📩 Receiver response:", r.text)
+#     except Exception as e:
+#         print("❌ Send error:", e)
+#         try:
+#             r = requests.post(RECEIVER_URL, json=payload, timeout=5)
+#             print("✅ Sent (fallback):", payload)
+#             print("📩 Receiver response:", r.text)
+#         except Exception as e2:
+#             print("❌ Fallback send error:", e2)
+
+# # -------------------- FASTAPI ROUTES --------------------
+# @app.get("/")
+# async def home(request: Request):
+#     return templates.TemplateResponse("index.html", {
+#         "request": request,
+#         "message": None,
+#         "num_detections": None,
+#         "bounding_boxes": [],
+#         "centers": [],
+#         "confidences": [],
+#         "processing_time_sec": None,
+#         "image_url": None,
+#         "real_points": []
+#     })
+
+# @app.post("/start-camera/")
+# async def start_camera():
+#     global reader_thread, stop_event
+#     if reader_thread is None or not reader_thread.is_alive():
+#         stop_event.clear()
+#         reader_thread = threading.Thread(target=realsense_thread, daemon=True)
+#         reader_thread.start()
+#         return JSONResponse({"status": "Camera started (Live window open)"})
+#     return JSONResponse({"status": "Camera already running"})
+
+# @app.post("/stop-camera/")
+# async def stop_camera():
+#     global stop_event
+#     stop_event.set()
+#     time.sleep(0.1)
+#     cv2.destroyAllWindows()
+#     return JSONResponse({"status": "Camera stopped"})
+
+# @app.post("/capture-detect/")
+# async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
+#     global latest_color_frame, latest_depth_frame, latest_intrinsics
+
+#     with frame_lock:
+#         color_snapshot = latest_color_frame.copy() if latest_color_frame is not None else None
+#         depth_frame = latest_depth_frame
+#         intrinsics = latest_intrinsics
+
+#     if color_snapshot is None or depth_frame is None or intrinsics is None:
+#         return templates.TemplateResponse("index.html", {
+#             "request": request,
+#             "message": "❌ Failed to capture image. Start camera first.",
+#             "num_detections": 0,
+#             "bounding_boxes": [],
+#             "centers": [],
+#             "confidences": [],
+#             "processing_time_sec": 0,
+#             "image_url": None,
+#             "real_points": []
+#         })
+
+#     cv2.imwrite("static/capture_image/frame.jpg", color_snapshot)
+
+#     t0 = time.time()
+#     annotated, boxes, centers, confs = detect_objects(color_snapshot, threshold)
+#     t1 = time.time()
+
+#     cv2.imwrite("static/detected_image/detected.jpg", annotated if boxes else color_snapshot)
+
+#     real_points = compute_real_points(centers, depth_frame, intrinsics) if centers else []
+
+#     payload = {"message": "Objects detected" if centers else "No Object Detected",
+#                "centers": centers,
+#                "real_points": real_points}
+
+#     await send_to_receiver(payload)
+
+#     return templates.TemplateResponse("index.html", {
+#         "request": request,
+#         "message": "✅ Objects detected" if boxes else "⚠️ No object detected",
+#         "num_detections": len(boxes),
+#         "bounding_boxes": boxes,
+#         "centers": centers,
+#         "confidences": confs,
+#         "processing_time_sec": round(t1 - t0, 3),
+#         "image_url": "/static/detected_image/detected.jpg",
+#         "real_points": real_points
+#     })
+
+# # -------------------- MAIN --------------------
+# def main():
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# if __name__ == "__main__":
+#     main()
+
+
+##################
+
 import threading
 import time
 import os
@@ -996,7 +1259,7 @@ import numpy as np
 import requests
 import httpx
 import pyrealsense2 as rs
-from fastapi import FastAPI, UploadFile, Form, Request
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -1085,6 +1348,7 @@ def realsense_thread():
 
             depth_frame = apply_depth_filters(depth_frame)
             color_image = np.asanyarray(color_frame.get_data())
+
             intrinsics = color_frame.profile.as_video_stream_profile().intrinsics
 
             with frame_lock:
@@ -1092,10 +1356,9 @@ def realsense_thread():
                 latest_depth_frame = depth_frame
                 latest_intrinsics = intrinsics
 
-            # ----------------- SHOW LIVE FEED -----------------
-            cv2.imshow("Live RealSense Feed", color_image)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                stop_event.set()
+            # Show live feed in separate OpenCV window
+            cv2.imshow("Live Camera Feed", color_image)
+            if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
         cv2.destroyAllWindows()
@@ -1129,17 +1392,29 @@ def compute_real_points(centers, depth_frame, intrinsics):
     valid_count = 0
     for (cx, cy) in centers:
         try:
+            # Get distance safely
             dist_m = depth_frame.get_distance(cx, cy)
-            if np.isnan(dist_m) or dist_m <= 0:
-                continue
+            if dist_m is None or np.isnan(dist_m) or dist_m <= 0:
+                continue  # skip invalid depth
+
+            # Convert pixel to 3D coordinates
             X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
             Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
             Z = dist_m
+
             points.extend([int(X*1000), int(Y*1000), int(Z*1000)])
             valid_count += 1
-        except:
+
+            # Print valid coordinates in terminal
+            print(f"Detected center ({cx},{cy}) -> 3D: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
+
+        except Exception as e:
+            # Just skip this point if any error occurs
+            print(f"⚠️ Skipping point ({cx},{cy}) due to error: {e}")
             continue
+
     return [valid_count] + points if valid_count > 0 else []
+
 
 # -------------------- SEND TO RECEIVER --------------------
 async def send_to_receiver(payload: dict):
@@ -1163,7 +1438,7 @@ async def home(request: Request):
     return templates.TemplateResponse("index.html", {
         "request": request,
         "message": None,
-        "num_detections": None,
+        "num_detections": 0,
         "bounding_boxes": [],
         "centers": [],
         "confidences": [],
@@ -1179,7 +1454,7 @@ async def start_camera():
         stop_event.clear()
         reader_thread = threading.Thread(target=realsense_thread, daemon=True)
         reader_thread.start()
-        return JSONResponse({"status": "Camera started (Live window open)"})
+        return JSONResponse({"status": "Camera started"})
     return JSONResponse({"status": "Camera already running"})
 
 @app.post("/stop-camera/")
