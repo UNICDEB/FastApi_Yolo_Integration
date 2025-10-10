@@ -1416,6 +1416,28 @@ def detect_objects(image: np.ndarray, threshold: float):
 #     return points
 
 
+# def compute_real_points(centers, depth_frame, intrinsics):
+#     points = []
+#     width, height = depth_frame.get_width(), depth_frame.get_height()
+
+#     for (cx, cy) in centers:
+#         # Clip coordinates to valid range
+#         cx = min(max(cx, 0), width - 1)
+#         cy = min(max(cy, 0), height - 1)
+
+#         # Get depth at this pixel
+#         dist_m = depth_frame.get_distance(cx, cy)
+
+#         # Use RealSense API to convert pixel → 3D coordinates
+#         X, Y, Z = rs.rs2_deproject_pixel_to_point(intrinsics, [cx, cy], dist_m)
+
+#         points.append((X, Y, Z))
+#         print(f"Pixel ({cx},{cy}) -> 3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
+
+#     return points
+
+import math
+
 def compute_real_points(centers, depth_frame, intrinsics):
     points = []
     width, height = depth_frame.get_width(), depth_frame.get_height()
@@ -1425,16 +1447,29 @@ def compute_real_points(centers, depth_frame, intrinsics):
         cx = min(max(cx, 0), width - 1)
         cy = min(max(cy, 0), height - 1)
 
-        # Get depth at this pixel
+        # Get depth at this pixel (in meters)
         dist_m = depth_frame.get_distance(cx, cy)
 
-        # Use RealSense API to convert pixel → 3D coordinates
+        # Convert pixel → 3D coordinates (meters)
         X, Y, Z = rs.rs2_deproject_pixel_to_point(intrinsics, [cx, cy], dist_m)
 
-        points.append((X, Y, Z))
-        print(f"Pixel ({cx},{cy}) -> 3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
+        # Convert meters → millimeters, then round up to integer
+        X_int = math.ceil(X * 1000) if X != 0 else 0
+        Y_int = math.ceil(Y * 1000) if Y != 0 else 0
+        Z_int = math.ceil(Z * 1000) if Z != 0 else 0
+
+        # Append flat values
+        points.extend([X_int, Y_int, Z_int])
+
+        # ✅ Print both float (m) and final int (mm)
+        print(
+            f"Pixel ({cx},{cy}) -> "
+            f"3D Point (float, m): X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} | "
+            f"3D Point (int, mm): ({X_int}, {Y_int}, {Z_int})"
+        )
 
     return points
+
 
 
 
