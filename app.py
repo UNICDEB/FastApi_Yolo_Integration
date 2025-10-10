@@ -1425,16 +1425,17 @@ def compute_real_points(centers, depth_frame, intrinsics):
         cx = min(max(cx, 0), width - 1)
         cy = min(max(cy, 0), height - 1)
 
+        # Get depth at this pixel
         dist_m = depth_frame.get_distance(cx, cy)
 
-        X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
-        Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
-        Z = dist_m
-        points.append((X, Y, Z))
+        # Use RealSense API to convert pixel → 3D coordinates
+        X, Y, Z = rs.rs2_deproject_pixel_to_point(intrinsics, [cx, cy], dist_m)
 
+        points.append((X, Y, Z))
         print(f"Pixel ({cx},{cy}) -> 3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
 
     return points
+
 
 
 
