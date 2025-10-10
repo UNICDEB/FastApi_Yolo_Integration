@@ -1292,9 +1292,7 @@ latest_intrinsics = None
 # -------------------- DEPTH FILTERS --------------------
 def create_depth_filters():
     filters = []
-    decimation = rs.decimation_filter()
-    decimation.set_option(rs.option.filter_magnitude, 1)
-    filters.append(decimation)
+    filters.append(rs.decimation_filter())
     filters.append(rs.disparity_transform(True))
     filters.append(rs.spatial_filter())
     filters.append(rs.temporal_filter())
@@ -1306,7 +1304,7 @@ depth_filters = create_depth_filters()
 def apply_depth_filters(depth_frame):
     for f in depth_filters:
         depth_frame = f.process(depth_frame)
-    return depth_frame
+    return depth_frame.as_depth_frame()  # ✅ Convert back to depth frame
 
 # -------------------- REALSENSE THREAD --------------------
 def start_realsense_pipeline():
@@ -1321,21 +1319,16 @@ def start_realsense_pipeline():
 
 def stop_realsense_pipeline():
     global pipeline
-    if pipeline is not None:
+    if pipeline:
         try:
             pipeline.stop()
-        except Exception:
+        except:
             pass
     pipeline = None
 
 def realsense_thread():
     global latest_color_frame, latest_depth_frame, latest_intrinsics
-    try:
-        start_realsense_pipeline()
-    except Exception as e:
-        print("❌ Failed to start RealSense pipeline:", e)
-        return
-
+    start_realsense_pipeline()
     try:
         while not stop_event.is_set():
             frames = pipeline.wait_for_frames()
@@ -1348,7 +1341,6 @@ def realsense_thread():
 
             depth_frame = apply_depth_filters(depth_frame)
             color_image = np.asanyarray(color_frame.get_data())
-
             intrinsics = color_frame.profile.as_video_stream_profile().intrinsics
 
             with frame_lock:
@@ -1356,8 +1348,7 @@ def realsense_thread():
                 latest_depth_frame = depth_frame
                 latest_intrinsics = intrinsics
 
-            # Show live feed in separate OpenCV window
-            cv2.imshow("Live Camera Feed", color_image)
+            cv2.imshow("RealSense Live Feed", color_image)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
@@ -1389,32 +1380,19 @@ def detect_objects(image: np.ndarray, threshold: float):
 # -------------------- 3D POINT CONVERSION --------------------
 def compute_real_points(centers, depth_frame, intrinsics):
     points = []
-    valid_count = 0
     for (cx, cy) in centers:
         try:
-            # Get distance safely
             dist_m = depth_frame.get_distance(cx, cy)
-            if dist_m is None or np.isnan(dist_m) or dist_m <= 0:
-                continue  # skip invalid depth
-
-            # Convert pixel to 3D coordinates
+            if np.isnan(dist_m) or dist_m <= 0:
+                continue
             X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
             Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
             Z = dist_m
-
-            points.extend([int(X*1000), int(Y*1000), int(Z*1000)])
-            valid_count += 1
-
-            # Print valid coordinates in terminal
-            print(f"Detected center ({cx},{cy}) -> 3D: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
-
+            points.append((X, Y, Z))
+            print(f"3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")  # ✅ Print in terminal
         except Exception as e:
-            # Just skip this point if any error occurs
-            print(f"⚠️ Skipping point ({cx},{cy}) due to error: {e}")
-            continue
-
-    return [valid_count] + points if valid_count > 0 else []
-
+            print(f"⚠️ Skipping point ({cx},{cy}) due to error:", e)
+    return points
 
 # -------------------- SEND TO RECEIVER --------------------
 async def send_to_receiver(payload: dict):
@@ -1438,7 +1416,7 @@ async def home(request: Request):
     return templates.TemplateResponse("index.html", {
         "request": request,
         "message": None,
-        "num_detections": 0,
+        "num_detections": None,
         "bounding_boxes": [],
         "centers": [],
         "confidences": [],
@@ -1462,13 +1440,11 @@ async def stop_camera():
     global stop_event
     stop_event.set()
     time.sleep(0.1)
-    cv2.destroyAllWindows()
     return JSONResponse({"status": "Camera stopped"})
 
 @app.post("/capture-detect/")
 async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
     global latest_color_frame, latest_depth_frame, latest_intrinsics
-
     with frame_lock:
         color_snapshot = latest_color_frame.copy() if latest_color_frame is not None else None
         depth_frame = latest_depth_frame
@@ -1487,12 +1463,11 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
             "real_points": []
         })
 
-    cv2.imwrite("static/capture_image/frame.jpg", color_snapshot)
-
     t0 = time.time()
     annotated, boxes, centers, confs = detect_objects(color_snapshot, threshold)
     t1 = time.time()
 
+    cv2.imwrite("static/capture_image/frame.jpg", color_snapshot)
     cv2.imwrite("static/detected_image/detected.jpg", annotated if boxes else color_snapshot)
 
     real_points = compute_real_points(centers, depth_frame, intrinsics) if centers else []
