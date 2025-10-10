@@ -1025,45 +1025,34 @@ latest_depth_frame = None
 
 # -------------------- RealSense Filters --------------------
 def create_depth_filter_pipeline():
-    """
-    Create the recommended Intel RealSense depth filter sequence.
-    Order: Decimation -> Depth2Disparity -> Spatial -> Temporal -> Disparity2Depth
-    """
+    """Create Intel RealSense depth filter sequence."""
     decimation = rs.decimation_filter()
-    decimation.set_option(rs.option.filter_magnitude, 1)  # reduce resolution
+    decimation.set_option(rs.option.filter_magnitude, 2)  # reduce resolution slightly
 
-    depth_to_disparity = rs.disparity_transform(True)   # depth -> disparity
-    disparity_to_depth = rs.disparity_transform(False)  # disparity -> depth
+    depth_to_disparity = rs.disparity_transform(True)
+    disparity_to_depth = rs.disparity_transform(False)
 
-    spatial = rs.spatial_filter()  # edge-preserving spatial smoothing
+    spatial = rs.spatial_filter()
     spatial.set_option(rs.option.holes_fill, 3)  # fill missing pixels
 
-    temporal = rs.temporal_filter()  # temporal smoothing
+    temporal = rs.temporal_filter()
+
 
     return decimation, depth_to_disparity, spatial, temporal, disparity_to_depth
 
-
-# Initialize filters once
+# Init filters once
 decimation, depth_to_disparity, spatial, temporal, disparity_to_depth = create_depth_filter_pipeline()
 
-
-def apply_depth_filters(frames):
-    """
-    Apply depth filters sequentially on frames.
-    """
-    depth_frame = frames.get_depth_frame()
+def apply_depth_filters(depth_frame):
+    """Apply depth filters sequentially."""
     if not depth_frame:
         return None
-
-    # Apply filters
     depth_frame = decimation.process(depth_frame)
     depth_frame = depth_to_disparity.process(depth_frame)
     depth_frame = spatial.process(depth_frame)
     depth_frame = temporal.process(depth_frame)
     depth_frame = disparity_to_depth.process(depth_frame)
-
     return depth_frame
-
 
 # -------------------- RealSense Helpers --------------------
 def start_realsense_pipeline():
@@ -1074,7 +1063,6 @@ def start_realsense_pipeline():
     config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
     return pipeline.start(config)
 
-
 def stop_realsense_pipeline():
     global pipeline
     if pipeline is not None:
@@ -1083,7 +1071,6 @@ def stop_realsense_pipeline():
         except Exception:
             pass
     pipeline = None
-
 
 def realsense_opencv_view():
     global latest_color_frame, latest_depth_frame
@@ -1097,10 +1084,12 @@ def realsense_opencv_view():
         while not stop_event.is_set():
             frames = pipeline.wait_for_frames()
             color_frame = frames.get_color_frame()
-            depth_frame = apply_depth_filters(frames)  # ✅ filtered depth frame
+            depth_frame = frames.get_depth_frame()
 
             if not color_frame or not depth_frame:
                 continue
+
+            depth_frame = apply_depth_filters(depth_frame)  # ✅ apply filters
 
             color_image = np.asanyarray(color_frame.get_data())
 
@@ -1114,7 +1103,6 @@ def realsense_opencv_view():
         cv2.destroyAllWindows()
     finally:
         stop_realsense_pipeline()
-
 
 # -------------------- Detection Helpers --------------------
 def detect_objects(image: np.ndarray, threshold: float):
@@ -1137,13 +1125,9 @@ def detect_objects(image: np.ndarray, threshold: float):
 
     return annotated, boxes, centers, confidences
 
-
 # -------------------- 3D Point Computation --------------------
 def compute_real_points(centers, depth_frame, intrinsics):
-    """
-    Compute 3D coordinates directly (with depth filters already applied).
-    Returns list: [valid_count, x1, y1, z1, ...]
-    """
+    """Compute 3D coordinates directly with depth filters applied."""
     flat_points = []
     valid_count = 0
 
@@ -1153,19 +1137,14 @@ def compute_real_points(centers, depth_frame, intrinsics):
             if np.isnan(dist_m) or dist_m <= 0:
                 continue
 
-            # Compute 3D point in meters
             point_3d = rs.rs2_deproject_pixel_to_point(intrinsics, [int(cx), int(cy)], dist_m)
-
-            # Convert to millimeters
-            px, py, pz = [int(p * 1000) for p in point_3d]
+            px, py, pz = [int(p * 1000) for p in point_3d]  # convert to mm
             flat_points.extend([px, py, pz])
             valid_count += 1
-
         except Exception:
             continue
 
     return [valid_count] + flat_points if valid_count > 0 else []
-
 
 # -------------------- Sending Helpers --------------------
 async def send_to_receiver(payload: dict):
@@ -1183,7 +1162,6 @@ async def send_to_receiver(payload: dict):
         except Exception as e2:
             print("❌ Fallback send error:", e2)
 
-
 # -------------------- Routes --------------------
 @app.get("/")
 async def home(request: Request):
@@ -1199,7 +1177,6 @@ async def home(request: Request):
         "real_points": []
     })
 
-
 @app.post("/start-camera/")
 async def start_camera():
     global reader_thread, stop_event
@@ -1210,7 +1187,6 @@ async def start_camera():
         return JSONResponse({"status": "Camera started (OpenCV window opened)"})
     return JSONResponse({"status": "Camera already running"})
 
-
 @app.post("/stop-camera/")
 async def stop_camera():
     global stop_event
@@ -1218,7 +1194,6 @@ async def stop_camera():
     time.sleep(0.1)
     cv2.destroyAllWindows()
     return JSONResponse({"status": "Camera stopped"})
-
 
 @app.post("/capture-detect/")
 async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
@@ -1275,7 +1250,6 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
         "real_points": real_points
     })
 
-
 @app.post("/detect/")
 async def detect_uploaded_image(request: Request, file: UploadFile = None, threshold: float = Form(0.5)):
     if file is None:
@@ -1315,13 +1289,10 @@ async def detect_uploaded_image(request: Request, file: UploadFile = None, thres
         "real_points": real_points
     })
 
-
 # -------------------- Main --------------------
 def main():
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
-
 if __name__ == "__main__":
     main()
-
