@@ -1002,7 +1002,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ultralytics import YOLO
 
-# -------------------- Global Config --------------------
+# -------------------- CONFIG --------------------
 MODEL_PATH = "weights/custom_loss_py_yolov8_best_100.pt"
 RECEIVER_URL = "http://10.240.9.18:5000"
 
@@ -1015,6 +1015,7 @@ os.makedirs("static/detected_image", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+# -------------------- GLOBALS --------------------
 pipeline = None
 align = None
 reader_thread = None
@@ -1025,11 +1026,12 @@ latest_color_frame = None
 latest_depth_frame = None
 latest_intrinsics = None
 
-# -------------------- RealSense Filters --------------------
+# -------------------- DEPTH FILTERS --------------------
 def create_depth_filters():
     filters = []
-    filters.append(rs.decimation_filter())
-    filters[-1].set_option(rs.option.filter_magnitude, 1)
+    decimation = rs.decimation_filter()
+    decimation.set_option(rs.option.filter_magnitude, 1)
+    filters.append(decimation)
     filters.append(rs.disparity_transform(True))
     filters.append(rs.spatial_filter())
     filters.append(rs.temporal_filter())
@@ -1043,7 +1045,7 @@ def apply_depth_filters(depth_frame):
         depth_frame = f.process(depth_frame)
     return depth_frame
 
-# -------------------- RealSense Thread --------------------
+# -------------------- REALSENSE THREAD --------------------
 def start_realsense_pipeline():
     global pipeline, align
     pipeline = rs.pipeline()
@@ -1051,7 +1053,6 @@ def start_realsense_pipeline():
     config.enable_stream(rs.stream.color, 1280, 720, rs.format.bgr8, 30)
     config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
     profile = pipeline.start(config)
-
     align = rs.align(rs.stream.color)
     return profile
 
@@ -1084,22 +1085,24 @@ def realsense_thread():
 
             depth_frame = apply_depth_filters(depth_frame)
             color_image = np.asanyarray(color_frame.get_data())
-
-            intrinsics = color_frame.profile.as_video_stream_profile().get_intrinsics()
+            intrinsics = color_frame.profile.as_video_stream_profile().intrinsics
 
             with frame_lock:
                 latest_color_frame = color_image.copy()
                 latest_depth_frame = depth_frame
                 latest_intrinsics = intrinsics
 
-            cv2.imshow("Live Camera Feed", color_image)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            # ----------------- SHOW LIVE FEED -----------------
+            cv2.imshow("Live RealSense Feed", color_image)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                stop_event.set()
                 break
+
         cv2.destroyAllWindows()
     finally:
         stop_realsense_pipeline()
 
-# -------------------- YOLO Detection --------------------
+# -------------------- YOLO DETECTION --------------------
 def detect_objects(image: np.ndarray, threshold: float):
     results = model(image)
     boxes_raw = results[0].boxes.xyxy.tolist()
@@ -1111,8 +1114,8 @@ def detect_objects(image: np.ndarray, threshold: float):
     for box, conf in zip(boxes_raw, confs_raw):
         if conf >= threshold:
             x1, y1, x2, y2 = map(int, box)
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 0, 255), 2)
             cv2.circle(annotated, (cx, cy), 5, (0, 255, 0), -1)
             boxes.append([x1, y1, x2, y2])
             centers.append([cx, cy])
@@ -1120,7 +1123,7 @@ def detect_objects(image: np.ndarray, threshold: float):
 
     return annotated, boxes, centers, confidences
 
-# -------------------- 3D Point Computation --------------------
+# -------------------- 3D POINT CONVERSION --------------------
 def compute_real_points(centers, depth_frame, intrinsics):
     points = []
     valid_count = 0
@@ -1138,7 +1141,7 @@ def compute_real_points(centers, depth_frame, intrinsics):
             continue
     return [valid_count] + points if valid_count > 0 else []
 
-# -------------------- Sending Helpers --------------------
+# -------------------- SEND TO RECEIVER --------------------
 async def send_to_receiver(payload: dict):
     try:
         async with httpx.AsyncClient(timeout=5) as client:
@@ -1154,7 +1157,7 @@ async def send_to_receiver(payload: dict):
         except Exception as e2:
             print("❌ Fallback send error:", e2)
 
-# -------------------- FastAPI Routes --------------------
+# -------------------- FASTAPI ROUTES --------------------
 @app.get("/")
 async def home(request: Request):
     return templates.TemplateResponse("index.html", {
@@ -1176,7 +1179,7 @@ async def start_camera():
         stop_event.clear()
         reader_thread = threading.Thread(target=realsense_thread, daemon=True)
         reader_thread.start()
-        return JSONResponse({"status": "Camera started (OpenCV window opened)"})
+        return JSONResponse({"status": "Camera started (Live window open)"})
     return JSONResponse({"status": "Camera already running"})
 
 @app.post("/stop-camera/")
@@ -1237,46 +1240,7 @@ async def capture_and_detect(request: Request, threshold: float = Form(0.5)):
         "real_points": real_points
     })
 
-@app.post("/detect/")
-async def detect_uploaded_image(request: Request, file: UploadFile = None, threshold: float = Form(0.5)):
-    if file is None:
-        return templates.TemplateResponse("index.html", {
-            "request": request,
-            "message": "⚠️ No file uploaded.",
-            "num_detections": 0,
-            "bounding_boxes": [],
-            "centers": [],
-            "confidences": [],
-            "processing_time_sec": 0,
-            "image_url": None,
-            "real_points": []
-        })
-
-    contents = await file.read()
-    npimg = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-
-    t0 = time.time()
-    annotated, boxes, centers, confs = detect_objects(img, threshold)
-    t1 = time.time()
-
-    cv2.imwrite("static/detected_image/detected.jpg", annotated if boxes else img)
-
-    real_points = [[None, None, None] for _ in centers]
-
-    return templates.TemplateResponse("index.html", {
-        "request": request,
-        "message": "✅ Objects detected" if boxes else "⚠️ No object detected",
-        "num_detections": len(boxes),
-        "bounding_boxes": boxes,
-        "centers": centers,
-        "confidences": confs,
-        "processing_time_sec": round(t1 - t0, 3),
-        "image_url": "/static/detected_image/detected.jpg",
-        "real_points": real_points
-    })
-
-# -------------------- Main --------------------
+# -------------------- MAIN --------------------
 def main():
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
