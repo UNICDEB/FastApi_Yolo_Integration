@@ -1293,7 +1293,7 @@ latest_intrinsics = None
 def create_depth_filters():
     # 1. Decimation filter (reduce depth noise / resolution)
     decimation = rs.decimation_filter()
-    decimation.set_option(rs.option.filter_magnitude, 2)  # Set magnitude (1=default, 2=half resolution)
+    decimation.set_option(rs.option.filter_magnitude, 1)  # Set magnitude (1=default, 2=half resolution)
     
     # 2. Depth to disparity
     depth_to_disparity = rs.disparity_transform(True)
@@ -1390,29 +1390,53 @@ def detect_objects(image: np.ndarray, threshold: float):
     return annotated, boxes, centers, confidences
 
 # -------------------- 3D POINT CONVERSION --------------------
+# def compute_real_points(centers, depth_frame, intrinsics):
+#     points = []
+#     print(cx,cy)
+#     for (cx, cy) in centers:
+#         try:
+#             # Check bounds
+#             if cx < 0 or cy < 0 or cx >= depth_frame.get_width() or cy >= depth_frame.get_height():
+#                 continue
+
+#             dist_m = depth_frame.get_distance(cx, cy)
+#             if np.isnan(dist_m) or dist_m <= 0:
+#                 continue
+
+#             X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
+#             Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
+#             Z = dist_m
+#             points.append((X, Y, Z))
+
+#             # ✅ Print to terminal
+#             print(f"3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
+
+#         except Exception as e:
+#             print(f"⚠️ Skipping point ({cx},{cy}) due to error:", e)
+#     return points
+
+
 def compute_real_points(centers, depth_frame, intrinsics):
     points = []
+    width, height = depth_frame.get_width(), depth_frame.get_height()
+
     for (cx, cy) in centers:
-        try:
-            # Check bounds
-            if cx < 0 or cy < 0 or cx >= depth_frame.get_width() or cy >= depth_frame.get_height():
-                continue
+        # Clip coordinates to valid range
+        cx = min(max(cx, 0), width - 1)
+        cy = min(max(cy, 0), height - 1)
 
-            dist_m = depth_frame.get_distance(cx, cy)
-            if np.isnan(dist_m) or dist_m <= 0:
-                continue
+        dist_m = depth_frame.get_distance(cx, cy)
 
-            X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
-            Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
-            Z = dist_m
-            points.append((X, Y, Z))
+        X = (cx - intrinsics.ppx) / intrinsics.fx * dist_m
+        Y = (cy - intrinsics.ppy) / intrinsics.fy * dist_m
+        Z = dist_m
+        points.append((X, Y, Z))
 
-            # ✅ Print to terminal
-            print(f"3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
+        print(f"Pixel ({cx},{cy}) -> 3D Point: X={X:.3f}, Y={Y:.3f}, Z={Z:.3f} m")
 
-        except Exception as e:
-            print(f"⚠️ Skipping point ({cx},{cy}) due to error:", e)
     return points
+
+
 
 # -------------------- SEND TO RECEIVER --------------------
 async def send_to_receiver(payload: dict):
