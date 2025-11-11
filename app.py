@@ -1264,6 +1264,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from ultralytics import YOLO
+import math
 
 # -------------------- CONFIG --------------------
 MODEL_PATH = "weights/custom_loss_py_yolov8_best_100.pt"
@@ -1436,7 +1437,6 @@ def detect_objects(image: np.ndarray, threshold: float):
 
 #     return points
 
-import math
 
 def compute_real_points(centers, depth_frame, intrinsics):
     points = []
